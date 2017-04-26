@@ -9,7 +9,8 @@ from celery.utils.log import get_logger
 from app import db
 from .models import CrontabSchedule
 from .models import IntervalSchedule
-from .models import PeriodicTask
+from .models import ScheduleTask
+from .models import ScheduleInfo
 
 logger = get_logger(__name__)
 
@@ -28,8 +29,8 @@ class ModelEntry(ScheduleEntry):
         super().__init__(
             name=model.name,
             task=model.task,
-            last_run_at=model.last_run_at,
-            total_run_count=model.total_run_count,
+            last_run_at=model.meta.last_run_at,
+            total_run_count=model.meta.total_run_count,
             schedule=model.schedule,
             args=model.args,
             kwargs=model.kwargs,
@@ -46,9 +47,9 @@ class ModelEntry(ScheduleEntry):
         self.model = model
 
     def __next__(self):
-        self.model.last_run_at = self._default_now()
-        self.model.total_run_count += 1
-        db.session.add(self.model)
+        self.model.meta.last_run_at = self._default_now()
+        self.model.meta.total_run_count += 1
+        db.session.add(self.model.meta)
         db.session.commit()
 
         return self.__class__(model=self.model, app=self.app)
@@ -61,9 +62,9 @@ class ModelEntry(ScheduleEntry):
 
     @classmethod
     def from_orig_entry(cls, name, app=None, **entry):
-        instance = PeriodicTask.query.filter_by(name=name).first()
+        instance = ScheduleTask.query.filter_by(name=name).first()
         if not instance:
-            instance = PeriodicTask(name=name)
+            instance = ScheduleTask(name=name)
 
         for k, v in cls._unpack_entry_fields(**entry).items():
             setattr(instance, k, v)
@@ -148,12 +149,12 @@ class DatabaseScheduler(Scheduler):
         logger.info('DatabaseScheduler: fetching database schedules...')
         return dict([
                         (x.name, ModelEntry(x, app=self.app))
-                        for x in PeriodicTask.get_available_tasks()
+                        for x in ScheduleTask.get_available_tasks()
                         ])
 
     @property
     def is_schedule_changed(self):
-        change_at = PeriodicTask.get_last_change_at()
+        change_at = ScheduleInfo.get_last_change_at()
         ts = self._last_timestamp or change_at
 
         if change_at and change_at > ts:

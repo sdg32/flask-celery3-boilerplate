@@ -6,6 +6,7 @@ import json
 
 from celery import current_app as celery_app
 from celery import schedules
+from sqlalchemy import event
 
 from app import db
 
@@ -21,7 +22,7 @@ class CrontabSchedule(db.Model):
     day_of_month = db.Column(db.String(50), default='*')
     month_of_year = db.Column(db.String(50), default='*')
 
-    tasks = db.relationship('PeriodicTask', backref='crontab', lazy='dynamic')
+    tasks = db.relationship('ScheduleTask', backref='crontab', lazy='dynamic')
 
     @property
     def schedule(self):
@@ -50,6 +51,9 @@ class CrontabSchedule(db.Model):
             db.session.commit()
         return instance
 
+    def __repr__(self):
+        return self.schedule
+
 
 class IntervalSchedule(db.Model):
 
@@ -59,7 +63,7 @@ class IntervalSchedule(db.Model):
     every = db.Column(db.Integer, default=1)
     period = db.Column(db.String(20))
 
-    tasks = db.relationship('PeriodicTask', backref='interval', lazy='dynamic')
+    tasks = db.relationship('ScheduleTask', backref='interval', lazy='dynamic')
 
     @property
     def schedule(self):
@@ -75,8 +79,11 @@ class IntervalSchedule(db.Model):
             db.session.commit()
         return instance
 
+    def __repr__(self):
+        return self.schedule
 
-class PeriodicTask(db.Model):
+
+class ScheduleTask(db.Model):
 
     __tablename__ = 'schedule_task'
 
@@ -92,11 +99,18 @@ class PeriodicTask(db.Model):
     exchange = db.Column(db.String(200))
     routing_key = db.Column(db.String(200))
     expires_at = db.Column(db.DateTime)
-    last_run_at = db.Column(db.DateTime)
-    total_run_count = db.Column(db.Integer, default=0)
     remarks = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now)
     modified_at = db.Column(db.DateTime, default=datetime.now)
+
+    @property
+    def meta(self):
+        instance = ScheduleMeta.query.get(self.id)
+        if not instance:
+            instance = ScheduleMeta(parent_id=self.id)
+            db.session.add(instance)
+            db.session.commit()
+        return instance
 
     @property
     def args(self):
@@ -129,10 +143,38 @@ class PeriodicTask(db.Model):
             if x.task in celery_app.tasks
         )
 
+    def __repr__(self):
+        return '<ScheduleTask {0}>'.format(self.name)
+
+
+class ScheduleMeta(db.Model):
+
+    __tablename__ = 'schedule_meta'
+
+    parent_id = db.Column(db.Integer, db.ForeignKey('schedule_task.id'),
+                          primary_key=True)
+    last_run_at = db.Column(db.DateTime)
+    total_run_count = db.Column(db.Integer, default=0)
+
+    parent = db.relationship('ScheduleTask')
+
+
+class ScheduleInfo(db.Model):
+
+    __tablename__ = 'schedule_info'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    last_changed_at = db.Column(db.DateTime, default=datetime.now)
+
     @classmethod
     def get_last_change_at(cls):
-        model = cls.query.order_by(cls.modified_at.desc()).first()
-        return model.modified_at if model else None
+        instance = cls.query.get(1)
+        if not instance:
+            instance = cls(id=1)
+            db.session.add(instance)
+            db.session.commit()
+
+        return instance.last_changed_at or datetime.now()
 
 
 class TaskResult(db.Model):
@@ -149,3 +191,18 @@ class TaskResult(db.Model):
     traceback = db.Column(db.Text)
     worker = db.Column(db.String(100))
     meta = db.Column(db.Text)
+
+
+@event.listens_for(CrontabSchedule, 'after_insert')
+@event.listens_for(CrontabSchedule, 'after_update')
+@event.listens_for(IntervalSchedule, 'after_insert')
+@event.listens_for(IntervalSchedule, 'after_update')
+@event.listens_for(ScheduleTask, 'after_insert')
+@event.listens_for(ScheduleTask, 'after_update')
+def update_schedule_info(mapper, connection, target):
+    table = ScheduleInfo.__table__
+    connection.execute(
+        table.update()
+        .where(table.c.id == 1)
+        .values(last_changed_at=datetime.now())
+    )

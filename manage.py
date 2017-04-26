@@ -15,10 +15,13 @@ migrate = Migrate(app, db)
 def make_shell_context():
     from app.schedule.models import CrontabSchedule
     from app.schedule.models import IntervalSchedule
-    from app.schedule.models import PeriodicTask
+    from app.schedule.models import ScheduleTask
+    from app.schedule.models import ScheduleMeta
+    from app.schedule.models import ScheduleInfo
 
     return dict(app=app, db=db, CrontabSchedule=CrontabSchedule,
-                IntervalSchedule=IntervalSchedule, ScheduleTask=PeriodicTask)
+                IntervalSchedule=IntervalSchedule, ScheduleTask=ScheduleTask,
+                ScheduleMeta=ScheduleMeta, ScheduleInfo=ScheduleInfo)
 
 
 manager.add_command('shell', Shell(make_context=make_shell_context))
