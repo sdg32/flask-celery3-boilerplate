@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 
+import os
 from threading import Thread
 
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from celery import Celery
+from celery import signals
 
 from config import Config
 
@@ -26,22 +28,28 @@ celery_state = celery.events.State()
 _celery_thread = None
 
 
-def _run_celery_background():
-    global _celery_thread
+def run_celery_state_monitor():
+    """Run celery state monitor."""
     global celery_state
 
-    def _monitor():
+    def monitor():
         with celery.connection() as cnn:
             recv = celery.events.Receiver(cnn,
                                           handlers={'*': celery_state.event})
             recv.capture(limit=None, timeout=None, wakeup=True)
 
-    _celery_thread = Thread(target=_monitor)
-    _celery_thread.daemon = True
-    _celery_thread.start()
+    t = Thread(target=monitor, daemon=True)
+    t.start()
 
 
-if not _celery_thread:
-    _run_celery_background()
+run_celery_state_monitor()
+
+
+@signals.worker_process_init.connect()
+def celery_worker_process_init(*args, **kwargs):
+    """Run celery state monitor for every worker process."""
+    if os.name != 'nt':
+        run_celery_state_monitor()
+
 
 from . import schedule
